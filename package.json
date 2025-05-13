@@ -10,7 +10,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@zxing/library": "^0.21.3",
     "barras": "file:",
+    "jsqr": "^1.4.0",
+    "lucide-react": "^0.510.0",
     "quagga": "^0.12.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
