@@ -12,6 +12,7 @@
   "dependencies": {
     "@zxing/library": "^0.21.3",
     "barras": "file:",
+    "html5-qrcode": "^2.3.8",
     "jsqr": "^1.4.0",
     "lucide-react": "^0.510.0",
     "quagga": "^0.12.1",

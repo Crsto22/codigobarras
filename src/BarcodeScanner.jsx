@@ -7,10 +7,8 @@ export default function BarcodeScanner() {
   const [result, setResult] = useState("");
   const [error, setError] = useState("");
   
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const streamRef = useRef(null);
-  const scanIntervalRef = useRef(null);
+  const scannerContainerRef = useRef(null);
+  const scannerInstanceRef = useRef(null);
 
   // Verificar disponibilidad de cámara
   useEffect(() => {
@@ -21,194 +19,153 @@ export default function BarcodeScanner() {
     }
   }, []);
 
-  // Limpieza al desmontar
+  // Cargar la biblioteca HTML5 QR Code Scanner
   useEffect(() => {
-    return () => {
-      if (scanIntervalRef.current) {
-        clearInterval(scanIntervalRef.current);
-      }
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
+    // Función para cargar el script desde CDN
+    const loadHtml5QrcodeScannerScript = () => {
+      return new Promise((resolve, reject) => {
+        if (window.Html5Qrcode) {
+          return resolve(window.Html5Qrcode);
+        }
+        
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js';
+        script.async = true;
+        script.onload = () => resolve(window.Html5Qrcode);
+        script.onerror = () => reject(new Error("No se pudo cargar HTML5 QR Code Scanner"));
+        document.body.appendChild(script);
+      });
     };
+
+    loadHtml5QrcodeScannerScript()
+      .then(() => console.log("HTML5 QR Code Scanner cargado correctamente"))
+      .catch(err => {
+        console.error("Error al cargar la biblioteca:", err);
+        setError("No se pudo cargar la biblioteca de escaneo");
+      });
   }, []);
 
-  // Iniciar la cámara y el escaneo
+  // Iniciar el escáner
   const startScanner = async () => {
     setError("");
     setResult("");
     setScanning(true);
     
     try {
-      // Solicitar acceso a la cámara (preferiblemente la trasera)
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { 
-          facingMode: "environment",
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        }
-      });
-      
-      // Guardar referencia al stream
-      streamRef.current = stream;
-      
-      // Asignar el stream al video y comenzar a reproducir
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        
-        // Esperar a que el video esté listo para reproducirse
-        videoRef.current.onloadedmetadata = () => {
-          videoRef.current.play()
-            .then(() => {
-              // Comenzar a escanear una vez que el video esté reproduciéndose
-              startScanningProcess();
-            })
-            .catch(err => {
-              console.error("Error al reproducir el video:", err);
-              setError("No se pudo iniciar la reproducción de video");
-              stopScanner();
-            });
-        };
+      // Verificar que la biblioteca esté cargada
+      if (!window.Html5Qrcode) {
+        throw new Error("La biblioteca de escaneo no está disponible");
       }
+      
+      // Crear una instancia del escáner
+      const html5QrCode = new window.Html5Qrcode("scanner-container");
+      scannerInstanceRef.current = html5QrCode;
+      
+      // Configuración del escáner
+      const config = {
+        fps: 10,               // Cuadros por segundo
+        qrbox: { width: 250, height: 250 },  // Tamaño de la caja de escaneo
+        aspectRatio: 1.0,      // Relación de aspecto de la cámara
+        formatsToSupport: [    // Formatos a soportar
+          0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 
+          13, 14, 15, 16, 17, 18, 19, 20
+        ]
+      };
+      
+      // Iniciar el escáner con la cámara trasera
+      await html5QrCode.start(
+        { facingMode: "environment" }, // Preferir cámara trasera
+        config,
+        onScanSuccess,
+        onScanFailure
+      );
+      
     } catch (err) {
-      console.error("Error al acceder a la cámara:", err);
-      setError("No se pudo acceder a la cámara. Verifica los permisos del navegador.");
+      console.error("Error al iniciar el escáner:", err);
+      setError("No se pudo iniciar el escáner: " + err.message);
       setScanning(false);
     }
   };
 
-  // Detener la cámara y el escaneo
-  const stopScanner = () => {
-    if (scanIntervalRef.current) {
-      clearInterval(scanIntervalRef.current);
-      scanIntervalRef.current = null;
-    }
-    
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
-      streamRef.current = null;
-    }
-    
-    setScanning(false);
-    
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-  };
-
-  // Iniciar el proceso de escaneo periódico
-  const startScanningProcess = () => {
-    // Asegurarse de que no haya un intervalo previo activo
-    if (scanIntervalRef.current) {
-      clearInterval(scanIntervalRef.current);
-    }
-    
-    // Configurar el intervalo para capturar y analizar frames
-    scanIntervalRef.current = setInterval(() => {
-      scanVideoFrame();
-    }, 200); // Escanear cada 200ms (5 veces por segundo)
-  };
-
-  // Capturar y analizar un frame del video
-  const scanVideoFrame = () => {
-    if (!videoRef.current || !canvasRef.current || !scanning) return;
-    
-    const video = videoRef.current;
-    const canvas = canvasRef.current;
-    
-    // Ajustar el tamaño del canvas al video
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    
-    // Dibujar el frame actual en el canvas
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-    
-    // Obtener los datos de la imagen
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    
-    try {
-      // Usar jsQR para detectar códigos QR o de barras
-      // (Cargado dinámicamente en tiempo de ejecución)
-      if (window.jsQR) {
-        const code = window.jsQR(imageData.data, imageData.width, imageData.height, {
-          inversionAttempts: "dontInvert"
+  // Función de éxito en el escaneo
+  const onScanSuccess = (decodedText, decodedResult) => {
+    // Detener el escáner cuando se detecte un código
+    if (scannerInstanceRef.current) {
+      scannerInstanceRef.current.stop()
+        .then(() => {
+          console.log("Escáner detenido correctamente");
+          scannerInstanceRef.current = null;
+          
+          // Almacenar el resultado y actualizar el estado
+          setResult(decodedText);
+          setScanning(false);
+        })
+        .catch(err => {
+          console.error("Error al detener el escáner:", err);
         });
-        
-        // Si se detecta un código
-        if (code) {
-          console.log("¡Código detectado!", code.data);
-          setResult(code.data);
-          stopScanner();
-        }
-      } else {
-        console.warn("La biblioteca jsQR no está cargada");
-      }
-    } catch (err) {
-      console.error("Error al procesar el frame:", err);
     }
   };
 
-  // Función para restablecer y escanear de nuevo
+  // Función para manejar errores de escaneo (no es necesario hacer nada aquí)
+  const onScanFailure = (error) => {
+    // No hacemos nada aquí para evitar inundar la consola con errores
+    // ya que este método se llama cuando no hay un código en el frame
+  };
+
+  // Detener el escáner manualmente
+  const stopScanner = () => {
+    if (scannerInstanceRef.current) {
+      scannerInstanceRef.current.stop()
+        .then(() => {
+          console.log("Escáner detenido correctamente");
+          scannerInstanceRef.current = null;
+          setScanning(false);
+        })
+        .catch(err => {
+          console.error("Error al detener el escáner:", err);
+          setError("Error al detener el escáner");
+          setScanning(false);
+        });
+    }
+  };
+
+  // Función para reiniciar el escáner
   const resetScanner = () => {
     setResult("");
     setError("");
     startScanner();
   };
 
-  // Efectos para cargar dinámicamente jsQR si no está disponible
+  // Limpiar al desmontar el componente
   useEffect(() => {
-    if (!window.jsQR) {
-      const script = document.createElement('script');
-      script.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js';
-      script.async = true;
-      script.onload = () => console.log("jsQR cargado correctamente");
-      script.onerror = () => setError("No se pudo cargar la biblioteca de escaneo");
-      document.body.appendChild(script);
-      
-      return () => {
-        document.body.removeChild(script);
-      };
-    }
+    return () => {
+      if (scannerInstanceRef.current) {
+        scannerInstanceRef.current.stop()
+          .catch(err => console.error("Error al limpiar el escáner:", err));
+      }
+    };
   }, []);
 
   return (
     <div className="w-full max-w-md mx-auto p-4 bg-white rounded-lg shadow-lg">
       <h2 className="text-xl font-bold mb-4 text-center text-gray-800">Escáner de Códigos</h2>
       
-      {/* Área para la cámara/resultado/error */}
+      {/* Área para el escáner/resultado/error */}
       <div className="w-full aspect-square bg-gray-100 rounded-lg mb-4 overflow-hidden relative">
-        {/* Video de la cámara */}
-        {scanning && (
-          <video 
-            ref={videoRef}
-            className="h-full w-full object-cover"
-            playsInline 
-            autoPlay
-            muted
-          />
-        )}
-        
-        {/* Canvas oculto para procesar frames */}
-        <canvas 
-          ref={canvasRef} 
-          className="hidden"
-        />
-        
-        {/* Superponer cuadro de escáner si está escaneando */}
-        {scanning && (
-          <div className="absolute inset-0 border-2 border-red-500 rounded-lg pointer-events-none">
-            <div className="absolute top-0 left-0 right-0 h-1 bg-red-500 animate-scan"></div>
-          </div>
-        )}
+        {/* Contenedor para el escáner HTML5 QR Code */}
+        <div 
+          id="scanner-container" 
+          ref={scannerContainerRef}
+          className={`w-full h-full ${scanning ? 'block' : 'hidden'}`}
+        ></div>
         
         {/* Mostrar resultado */}
         {result && !scanning && (
           <div className="flex flex-col items-center justify-center h-full w-full bg-green-100 p-4">
             <Check size={48} className="text-green-600 mb-2" />
             <p className="text-green-800 font-medium text-center mb-2">¡Código detectado!</p>
-            <div className="bg-white px-4 py-2 rounded-lg w-full text-center">
-              <p className="font-bold text-gray-800 break-all">{result}</p>
+            <div className="bg-white px-4 py-2 rounded-lg w-full">
+              <p className="font-bold text-gray-800 break-all text-center">{result}</p>
             </div>
           </div>
         )}
@@ -271,18 +228,6 @@ export default function BarcodeScanner() {
           Apunta la cámara directamente al código para escanearlo automáticamente.
         </p>
       </div>
-      
-      {/* Estilos para la animación de escaneo */}
-      <style jsx>{`
-        @keyframes scan {
-          0% { transform: translateY(0); }
-          50% { transform: translateY(100%); }
-          100% { transform: translateY(0); }
-        }
-        .animate-scan {
-          animation: scan 1.5s linear infinite;
-        }
-      `}</style>
     </div>
   );
 }
